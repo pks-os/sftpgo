@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -361,6 +362,16 @@ func streamJSONArray(w http.ResponseWriter, chunkSize int, dataGetter func(limit
 		offset += count
 	}
 	streamData(w, []byte("]"))
+}
+
+func renderPNGImage(w http.ResponseWriter, r *http.Request, b []byte) {
+	if len(b) == 0 {
+		ctx := context.WithValue(r.Context(), render.StatusCtxKey, http.StatusNotFound)
+		render.PlainText(w, r.WithContext(ctx), http.StatusText(http.StatusNotFound))
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	streamData(w, b)
 }
 
 func getCompressedFileName(username string, files []string) string {
@@ -717,7 +728,7 @@ func updateLoginMetrics(user *dataprovider.User, loginMethod, ip string, err err
 }
 
 func checkHTTPClientUser(user *dataprovider.User, r *http.Request, connectionID string, checkSessions bool) error {
-	if util.Contains(user.Filters.DeniedProtocols, common.ProtocolHTTP) {
+	if slices.Contains(user.Filters.DeniedProtocols, common.ProtocolHTTP) {
 		logger.Info(logSender, connectionID, "cannot login user %q, protocol HTTP is not allowed", user.Username)
 		return util.NewI18nError(
 			fmt.Errorf("protocol HTTP is not allowed for user %q", user.Username),
@@ -902,7 +913,7 @@ func isUserAllowedToResetPassword(r *http.Request, user *dataprovider.User) bool
 	if !user.CanResetPassword() {
 		return false
 	}
-	if util.Contains(user.Filters.DeniedProtocols, common.ProtocolHTTP) {
+	if slices.Contains(user.Filters.DeniedProtocols, common.ProtocolHTTP) {
 		return false
 	}
 	if !user.IsLoginMethodAllowed(dataprovider.LoginMethodPassword, common.ProtocolHTTP) {

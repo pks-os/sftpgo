@@ -128,16 +128,6 @@ var bytesSizeTable = map[string]uint64{
 	"e":  eByte,
 }
 
-// Contains reports whether v is present in elems.
-func Contains[T comparable](elems []T, v T) bool {
-	for _, s := range elems {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 // Remove removes an element from a string slice and
 // returns the modified slice
 func Remove(elems []string, val string) []string {
@@ -807,15 +797,6 @@ func GetRedactedURL(rawurl string) string {
 		return rawurl
 	}
 	return u.Redacted()
-}
-
-// PrependFileInfo prepends a file info to a slice in an efficient way.
-// We, optimistically, assume that the slice has enough capacity
-func PrependFileInfo(files []os.FileInfo, info os.FileInfo) []os.FileInfo {
-	files = append(files, nil)
-	copy(files[1:], files)
-	files[0] = info
-	return files
 }
 
 // GetTLSVersion returns the TLS version for integer:

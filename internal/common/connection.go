@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,7 +63,7 @@ type BaseConnection struct {
 // NewBaseConnection returns a new BaseConnection
 func NewBaseConnection(id, protocol, localAddr, remoteAddr string, user dataprovider.User) *BaseConnection {
 	connID := id
-	if util.Contains(supportedProtocols, protocol) {
+	if slices.Contains(supportedProtocols, protocol) {
 		connID = fmt.Sprintf("%s_%s", protocol, id)
 	}
 	user.UploadBandwidth, user.DownloadBandwidth = user.GetBandwidthForIP(util.GetIPFromRemoteAddress(remoteAddr), connID)
@@ -131,7 +132,7 @@ func (c *BaseConnection) GetRemoteIP() string {
 // SetProtocol sets the protocol for this connection
 func (c *BaseConnection) SetProtocol(protocol string) {
 	c.protocol = protocol
-	if util.Contains(supportedProtocols, c.protocol) {
+	if slices.Contains(supportedProtocols, c.protocol) {
 		c.ID = fmt.Sprintf("%v_%v", c.protocol, c.ID)
 	}
 }
@@ -1795,12 +1796,12 @@ type DirListerAt struct {
 	lister      vfs.DirLister
 }
 
-// Add adds the given os.FileInfo to the internal cache
-func (l *DirListerAt) Add(fi os.FileInfo) {
+// Prepend adds the given os.FileInfo as first element of the internal cache
+func (l *DirListerAt) Prepend(fi os.FileInfo) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.info = append(l.info, fi)
+	l.info = slices.Insert(l.info, 0, fi)
 }
 
 // ListAt implements sftp.ListerAt
@@ -1813,10 +1814,10 @@ func (l *DirListerAt) ListAt(f []os.FileInfo, _ int64) (int, error) {
 	}
 	if len(f) <= len(l.info) {
 		files := make([]os.FileInfo, 0, len(f))
-		for idx := len(l.info) - 1; idx >= 0; idx-- {
+		for idx := range l.info {
 			files = append(files, l.info[idx])
 			if len(files) == len(f) {
-				l.info = l.info[:idx]
+				l.info = l.info[idx+1:]
 				n := copy(f, files)
 				return n, nil
 			}
@@ -1838,9 +1839,7 @@ func (l *DirListerAt) Next(limit int) ([]os.FileInfo, error) {
 		}
 		files = l.user.FilterListDir(files, l.virtualPath)
 		if len(l.info) > 0 {
-			for _, fi := range l.info {
-				files = util.PrependFileInfo(files, fi)
-			}
+			files = slices.Concat(l.info, files)
 			l.info = nil
 		}
 		if err != nil || len(files) > 0 {

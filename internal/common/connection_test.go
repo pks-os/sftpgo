@@ -22,6 +22,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -389,7 +390,7 @@ func TestErrorsMapping(t *testing.T) {
 		err := conn.GetFsError(fs, os.ErrNotExist)
 		if protocol == ProtocolSFTP {
 			assert.ErrorIs(t, err, sftp.ErrSSHFxNoSuchFile)
-		} else if util.Contains(osErrorsProtocols, protocol) {
+		} else if slices.Contains(osErrorsProtocols, protocol) {
 			assert.EqualError(t, err, os.ErrNotExist.Error())
 		} else {
 			assert.EqualError(t, err, ErrNotExist.Error())
@@ -1134,8 +1135,8 @@ func TestListerAt(t *testing.T) {
 	require.Equal(t, 0, n)
 	lister, err = conn.ListDir("/")
 	require.NoError(t, err)
-	lister.Add(vfs.NewFileInfo("..", true, 0, time.Unix(0, 0), false))
-	lister.Add(vfs.NewFileInfo(".", true, 0, time.Unix(0, 0), false))
+	lister.Prepend(vfs.NewFileInfo("..", true, 0, time.Unix(0, 0), false))
+	lister.Prepend(vfs.NewFileInfo(".", true, 0, time.Unix(0, 0), false))
 	files = make([]os.FileInfo, 1)
 	n, err = lister.ListAt(files, 0)
 	require.NoError(t, err)

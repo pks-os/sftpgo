@@ -20,6 +20,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"io/fs"
 	"math"
@@ -33,6 +36,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1337,7 +1341,7 @@ func TestGroupSettingsOverride(t *testing.T) {
 	var folderNames []string
 	if assert.Len(t, user.VirtualFolders, 4) {
 		for _, f := range user.VirtualFolders {
-			if !util.Contains(folderNames, f.Name) {
+			if !slices.Contains(folderNames, f.Name) {
 				folderNames = append(folderNames, f.Name)
 			}
 			switch f.Name {
@@ -1345,7 +1349,7 @@ func TestGroupSettingsOverride(t *testing.T) {
 				assert.Equal(t, mappedPath1, f.MappedPath)
 				assert.Equal(t, 3, f.BaseVirtualFolder.FsConfig.OSConfig.ReadBufferSize)
 				assert.Equal(t, 5, f.BaseVirtualFolder.FsConfig.OSConfig.WriteBufferSize)
-				assert.True(t, util.Contains([]string{"/vdir1", "/vdir2"}, f.VirtualPath))
+				assert.True(t, slices.Contains([]string{"/vdir1", "/vdir2"}, f.VirtualPath))
 			case folderName2:
 				assert.Equal(t, mappedPath2, f.MappedPath)
 				assert.Equal(t, "/vdir3", f.VirtualPath)
@@ -2100,16 +2104,16 @@ func TestActionRuleRelations(t *testing.T) {
 	action1, _, err = httpdtest.GetEventActionByName(action1.Name, http.StatusOK)
 	assert.NoError(t, err)
 	assert.Len(t, action1.Rules, 1)
-	assert.True(t, util.Contains(action1.Rules, rule1.Name))
+	assert.True(t, slices.Contains(action1.Rules, rule1.Name))
 	action2, _, err = httpdtest.GetEventActionByName(action2.Name, http.StatusOK)
 	assert.NoError(t, err)
 	assert.Len(t, action2.Rules, 1)
-	assert.True(t, util.Contains(action2.Rules, rule2.Name))
+	assert.True(t, slices.Contains(action2.Rules, rule2.Name))
 	action3, _, err = httpdtest.GetEventActionByName(action3.Name, http.StatusOK)
 	assert.NoError(t, err)
 	assert.Len(t, action3.Rules, 2)
-	assert.True(t, util.Contains(action3.Rules, rule1.Name))
-	assert.True(t, util.Contains(action3.Rules, rule2.Name))
+	assert.True(t, slices.Contains(action3.Rules, rule1.Name))
+	assert.True(t, slices.Contains(action3.Rules, rule2.Name))
 	// referenced actions cannot be removed
 	_, err = httpdtest.RemoveEventAction(action1, http.StatusBadRequest)
 	assert.NoError(t, err)
@@ -2137,7 +2141,7 @@ func TestActionRuleRelations(t *testing.T) {
 	action3, _, err = httpdtest.GetEventActionByName(action3.Name, http.StatusOK)
 	assert.NoError(t, err)
 	assert.Len(t, action3.Rules, 1)
-	assert.True(t, util.Contains(action3.Rules, rule1.Name))
+	assert.True(t, slices.Contains(action3.Rules, rule1.Name))
 
 	_, err = httpdtest.RemoveEventRule(rule1, http.StatusOK)
 	assert.NoError(t, err)
@@ -8909,7 +8913,7 @@ func TestBasicUserHandlingMock(t *testing.T) {
 	assert.Equal(t, user.MaxSessions, updatedUser.MaxSessions)
 	assert.Equal(t, user.UploadBandwidth, updatedUser.UploadBandwidth)
 	assert.Equal(t, 1, len(updatedUser.Permissions["/"]))
-	assert.True(t, util.Contains(updatedUser.Permissions["/"], dataprovider.PermAny))
+	assert.True(t, slices.Contains(updatedUser.Permissions["/"], dataprovider.PermAny))
 	req, _ = http.NewRequest(http.MethodDelete, userPath+"/"+user.Username, nil)
 	setBearerForReq(req, token)
 	rr = executeRequest(req)
@@ -12137,7 +12141,7 @@ func TestUserPermissionsMock(t *testing.T) {
 	err = render.DecodeJSON(rr.Body, &updatedUser)
 	assert.NoError(t, err)
 	if val, ok := updatedUser.Permissions["/otherdir"]; ok {
-		assert.True(t, util.Contains(val, dataprovider.PermListItems))
+		assert.True(t, slices.Contains(val, dataprovider.PermListItems))
 		assert.Equal(t, 1, len(val))
 	} else {
 		assert.Fail(t, "expected dir not found in permissions")
@@ -13350,10 +13354,12 @@ func TestWebConfigsMock(t *testing.T) {
 	checkResponseCode(t, http.StatusOK, rr)
 
 	form := make(url.Values)
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err := getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusForbidden, rr)
 	// parse form error
@@ -13371,10 +13377,12 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Add("sftp_host_key_algos", ssh.InsecureCertAlgoDSAv01)
 	form.Set("sftp_pub_key_algos", ssh.InsecureKeyAlgoDSA)
 	form.Set("form_action", "sftp_submit")
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nError500Message) // invalid algo
@@ -13383,10 +13391,12 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Set("sftp_pub_key_algos", ssh.InsecureKeyAlgoDSA)
 	form.Set("sftp_kex_algos", "diffie-hellman-group18-sha512")
 	form.Add("sftp_kex_algos", ssh.KeyExchangeDH16SHA512)
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
@@ -13401,10 +13411,12 @@ func TestWebConfigsMock(t *testing.T) {
 	assert.Contains(t, configs.SFTPD.KexAlgorithms, ssh.KeyExchangeDH16SHA512)
 	// invalid form action
 	form.Set("form_action", "")
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusBadRequest, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nError400Message)
@@ -13416,10 +13428,12 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Set("smtp_password", defaultPassword)
 	form.Set("smtp_domain", "localdomain")
 	form.Set("smtp_auth", "100")
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nError500Message) // invalid smtp_auth
@@ -13430,10 +13444,12 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Set("smtp_debug", "checked")
 	form.Set("smtp_oauth2_provider", "1")
 	form.Set("smtp_oauth2_client_id", "123")
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
@@ -13460,10 +13476,12 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Set("smtp_password", redactedSecret)
 	form.Set("smtp_auth", "")
 	configs.SMTP.AuthType = 0 // empty will be converted to 0
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
@@ -13479,10 +13497,12 @@ func TestWebConfigsMock(t *testing.T) {
 	updatedConfigs.SMTP.Password = kms.NewSecret(sdkkms.SecretStatusSecretBox, encryptedPayload, secretKey, "")
 	err = dataprovider.UpdateConfigs(&updatedConfigs, "", "", "")
 	assert.NoError(t, err)
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
@@ -13492,19 +13512,23 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Add("acme_protocols", "2")
 	form.Add("acme_protocols", "3")
 	form.Set("acme_domain", "example.com")
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
 	// no email set, validation will fail
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nErrorInvalidEmail)
 	form.Set("acme_domain", "")
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
@@ -13535,10 +13559,12 @@ func TestWebConfigsMock(t *testing.T) {
 	form.Add("acme_protocols", "1000")
 	form.Set("acme_domain", domain)
 	form.Set("acme_email", "email@example.com")
-	req, err = http.NewRequest(http.MethodPost, webConfigsPath, bytes.NewBuffer([]byte(form.Encode())))
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
 	assert.NoError(t, err)
 	setJWTCookieForReq(req, webToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusOK, rr)
 	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
@@ -13557,6 +13583,201 @@ func TestWebConfigsMock(t *testing.T) {
 	err = os.Remove(crtPath)
 	assert.NoError(t, err)
 	err = os.Remove(keyPath)
+	assert.NoError(t, err)
+	err = dataprovider.UpdateConfigs(nil, "", "", "")
+	assert.NoError(t, err)
+}
+
+func TestBrandingConfigMock(t *testing.T) {
+	err := dataprovider.UpdateConfigs(nil, "", "", "")
+	assert.NoError(t, err)
+
+	webClientLogoPath := "/static/branding/webclient/logo.png"
+	webClientFaviconPath := "/static/branding/webclient/favicon.png"
+	webAdminLogoPath := "/static/branding/webadmin/logo.png"
+	webAdminFaviconPath := "/static/branding/webadmin/favicon.png"
+	// no custom log or favicon was set
+	for _, p := range []string{webClientLogoPath, webClientFaviconPath, webAdminLogoPath, webAdminFaviconPath} {
+		req, err := http.NewRequest(http.MethodGet, p, nil)
+		assert.NoError(t, err)
+		rr := executeRequest(req)
+		checkResponseCode(t, http.StatusNotFound, rr)
+	}
+
+	webToken, err := getJWTWebTokenFromTestServer(defaultTokenAuthUser, defaultTokenAuthPass)
+	assert.NoError(t, err)
+	csrfToken, err := getCSRFTokenFromInternalPageMock(webConfigsPath, webToken)
+	assert.NoError(t, err)
+	form := make(url.Values)
+	form.Set(csrfFormToken, csrfToken)
+	form.Set("form_action", "branding_submit")
+	form.Set("branding_webadmin_name", "Custom WebAdmin")
+	form.Set("branding_webadmin_short_name", "WebAdmin")
+	form.Set("branding_webadmin_disclaimer_name", "Admin disclaimer")
+	form.Set("branding_webadmin_disclaimer_url", "invalid, not a URL")
+	form.Set("branding_webclient_name", "Custom WebClient")
+	form.Set("branding_webclient_short_name", "WebClient")
+	form.Set("branding_webclient_disclaimer_name", "Client disclaimer")
+	form.Set("branding_webclient_disclaimer_url", "https://example.com")
+	b, contentType, err := getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr := executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nErrorInvalidDisclaimerURL)
+
+	form.Set("branding_webadmin_disclaimer_url", "https://example.net")
+	tmpFile := filepath.Join(os.TempDir(), util.GenerateUniqueID()+".png")
+	err = createTestPNG(tmpFile, 512, 512, color.RGBA{100, 200, 200, 0xff})
+	assert.NoError(t, err)
+
+	b, contentType, err = getMultipartFormData(form, "branding_webadmin_logo", tmpFile)
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
+	// check
+	configs, err := dataprovider.GetConfigs()
+	assert.NoError(t, err)
+	assert.Equal(t, "Custom WebAdmin", configs.Branding.WebAdmin.Name)
+	assert.Equal(t, "WebAdmin", configs.Branding.WebAdmin.ShortName)
+	assert.Equal(t, "Admin disclaimer", configs.Branding.WebAdmin.DisclaimerName)
+	assert.Equal(t, "https://example.net", configs.Branding.WebAdmin.DisclaimerURL)
+	assert.Equal(t, "Custom WebClient", configs.Branding.WebClient.Name)
+	assert.Equal(t, "WebClient", configs.Branding.WebClient.ShortName)
+	assert.Equal(t, "Client disclaimer", configs.Branding.WebClient.DisclaimerName)
+	assert.Equal(t, "https://example.com", configs.Branding.WebClient.DisclaimerURL)
+	assert.Greater(t, len(configs.Branding.WebAdmin.Logo), 0)
+	assert.Len(t, configs.Branding.WebAdmin.Favicon, 0)
+	assert.Len(t, configs.Branding.WebClient.Logo, 0)
+	assert.Len(t, configs.Branding.WebClient.Favicon, 0)
+
+	err = createTestPNG(tmpFile, 256, 256, color.RGBA{120, 220, 220, 0xff})
+	assert.NoError(t, err)
+	form.Set("branding_webadmin_logo_remove", "0") // 0 preserves WebAdmin logo
+	b, contentType, err = getMultipartFormData(form, "branding_webadmin_favicon", tmpFile)
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
+	configs, err = dataprovider.GetConfigs()
+	assert.NoError(t, err)
+	assert.Equal(t, "Custom WebAdmin", configs.Branding.WebAdmin.Name)
+	assert.Equal(t, "WebAdmin", configs.Branding.WebAdmin.ShortName)
+	assert.Equal(t, "Admin disclaimer", configs.Branding.WebAdmin.DisclaimerName)
+	assert.Equal(t, "https://example.net", configs.Branding.WebAdmin.DisclaimerURL)
+	assert.Equal(t, "Custom WebClient", configs.Branding.WebClient.Name)
+	assert.Equal(t, "WebClient", configs.Branding.WebClient.ShortName)
+	assert.Equal(t, "Client disclaimer", configs.Branding.WebClient.DisclaimerName)
+	assert.Equal(t, "https://example.com", configs.Branding.WebClient.DisclaimerURL)
+	assert.Greater(t, len(configs.Branding.WebAdmin.Logo), 0)
+	assert.Greater(t, len(configs.Branding.WebAdmin.Favicon), 0)
+	assert.Len(t, configs.Branding.WebClient.Logo, 0)
+	assert.Len(t, configs.Branding.WebClient.Favicon, 0)
+
+	err = createTestPNG(tmpFile, 256, 256, color.RGBA{80, 90, 110, 0xff})
+	assert.NoError(t, err)
+	b, contentType, err = getMultipartFormData(form, "branding_webclient_logo", tmpFile)
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
+	configs, err = dataprovider.GetConfigs()
+	assert.NoError(t, err)
+	assert.Greater(t, len(configs.Branding.WebClient.Logo), 0)
+
+	err = createTestPNG(tmpFile, 256, 256, color.RGBA{120, 50, 120, 0xff})
+	assert.NoError(t, err)
+	b, contentType, err = getMultipartFormData(form, "branding_webclient_favicon", tmpFile)
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
+	configs, err = dataprovider.GetConfigs()
+	assert.NoError(t, err)
+	assert.Greater(t, len(configs.Branding.WebClient.Favicon), 0)
+
+	for _, p := range []string{webClientLogoPath, webClientFaviconPath, webAdminLogoPath, webAdminFaviconPath} {
+		req, err := http.NewRequest(http.MethodGet, p, nil)
+		assert.NoError(t, err)
+		rr := executeRequest(req)
+		checkResponseCode(t, http.StatusOK, rr)
+	}
+	// remove images
+	form.Set("branding_webadmin_logo_remove", "1")
+	form.Set("branding_webclient_logo_remove", "1")
+	form.Set("branding_webadmin_favicon_remove", "1")
+	form.Set("branding_webclient_favicon_remove", "1")
+	b, contentType, err = getMultipartFormData(form, "", "")
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nConfigsOK)
+	configs, err = dataprovider.GetConfigs()
+	assert.NoError(t, err)
+	assert.Len(t, configs.Branding.WebAdmin.Logo, 0)
+	assert.Len(t, configs.Branding.WebAdmin.Favicon, 0)
+	assert.Len(t, configs.Branding.WebClient.Logo, 0)
+	assert.Len(t, configs.Branding.WebClient.Favicon, 0)
+	for _, p := range []string{webClientLogoPath, webClientFaviconPath, webAdminLogoPath, webAdminFaviconPath} {
+		req, err := http.NewRequest(http.MethodGet, p, nil)
+		assert.NoError(t, err)
+		rr := executeRequest(req)
+		checkResponseCode(t, http.StatusNotFound, rr)
+	}
+	form.Del("branding_webadmin_logo_remove")
+	form.Del("branding_webclient_logo_remove")
+	form.Del("branding_webadmin_favicon_remove")
+	form.Del("branding_webclient_favicon_remove")
+	// image too large
+	err = createTestPNG(tmpFile, 768, 512, color.RGBA{120, 50, 120, 0xff})
+	assert.NoError(t, err)
+	b, contentType, err = getMultipartFormData(form, "branding_webclient_logo", tmpFile)
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nErrorInvalidPNGSize)
+	// not a png image
+	err = createTestFile(tmpFile, 128)
+	assert.NoError(t, err)
+	b, contentType, err = getMultipartFormData(form, "branding_webclient_logo", tmpFile)
+	assert.NoError(t, err)
+	req, err = http.NewRequest(http.MethodPost, webConfigsPath, &b)
+	assert.NoError(t, err)
+	setJWTCookieForReq(req, webToken)
+	req.Header.Set("Content-Type", contentType)
+	rr = executeRequest(req)
+	checkResponseCode(t, http.StatusOK, rr)
+	assert.Contains(t, rr.Body.String(), util.I18nErrorInvalidPNG)
+
+	err = os.Remove(tmpFile)
 	assert.NoError(t, err)
 	err = dataprovider.UpdateConfigs(nil, "", "", "")
 	assert.NoError(t, err)
@@ -21332,10 +21553,10 @@ func TestWebUserAddMock(t *testing.T) {
 	assert.Equal(t, 60, newUser.Filters.PasswordStrength)
 	assert.Greater(t, newUser.LastPasswordChange, int64(0))
 	assert.True(t, newUser.Filters.RequirePasswordChange)
-	assert.True(t, util.Contains(newUser.PublicKeys, testPubKey))
+	assert.True(t, slices.Contains(newUser.PublicKeys, testPubKey))
 	if val, ok := newUser.Permissions["/subdir"]; ok {
-		assert.True(t, util.Contains(val, dataprovider.PermListItems))
-		assert.True(t, util.Contains(val, dataprovider.PermDownload))
+		assert.True(t, slices.Contains(val, dataprovider.PermListItems))
+		assert.True(t, slices.Contains(val, dataprovider.PermDownload))
 	} else {
 		assert.Fail(t, "user permissions must contain /somedir", "actual: %v", newUser.Permissions)
 	}
@@ -21354,20 +21575,20 @@ func TestWebUserAddMock(t *testing.T) {
 		case "/dir1":
 			assert.Len(t, filter.DeniedPatterns, 1)
 			assert.Len(t, filter.AllowedPatterns, 1)
-			assert.True(t, util.Contains(filter.AllowedPatterns, "*.png"))
-			assert.True(t, util.Contains(filter.DeniedPatterns, "*.zip"))
+			assert.True(t, slices.Contains(filter.AllowedPatterns, "*.png"))
+			assert.True(t, slices.Contains(filter.DeniedPatterns, "*.zip"))
 			assert.Equal(t, sdk.DenyPolicyDefault, filter.DenyPolicy)
 		case "/dir2":
 			assert.Len(t, filter.DeniedPatterns, 1)
 			assert.Len(t, filter.AllowedPatterns, 2)
-			assert.True(t, util.Contains(filter.AllowedPatterns, "*.jpg"))
-			assert.True(t, util.Contains(filter.AllowedPatterns, "*.png"))
-			assert.True(t, util.Contains(filter.DeniedPatterns, "*.mkv"))
+			assert.True(t, slices.Contains(filter.AllowedPatterns, "*.jpg"))
+			assert.True(t, slices.Contains(filter.AllowedPatterns, "*.png"))
+			assert.True(t, slices.Contains(filter.DeniedPatterns, "*.mkv"))
 			assert.Equal(t, sdk.DenyPolicyHide, filter.DenyPolicy)
 		case "/dir3":
 			assert.Len(t, filter.DeniedPatterns, 1)
 			assert.Len(t, filter.AllowedPatterns, 0)
-			assert.True(t, util.Contains(filter.DeniedPatterns, "*.rar"))
+			assert.True(t, slices.Contains(filter.DeniedPatterns, "*.rar"))
 			assert.Equal(t, sdk.DenyPolicyDefault, filter.DenyPolicy)
 		}
 	}
@@ -21608,16 +21829,16 @@ func TestWebUserUpdateMock(t *testing.T) {
 	assert.Equal(t, 40, updateUser.Filters.PasswordStrength)
 	assert.True(t, updateUser.Filters.RequirePasswordChange)
 	if val, ok := updateUser.Permissions["/otherdir"]; ok {
-		assert.True(t, util.Contains(val, dataprovider.PermListItems))
-		assert.True(t, util.Contains(val, dataprovider.PermUpload))
+		assert.True(t, slices.Contains(val, dataprovider.PermListItems))
+		assert.True(t, slices.Contains(val, dataprovider.PermUpload))
 	} else {
 		assert.Fail(t, "user permissions must contains /otherdir", "actual: %v", updateUser.Permissions)
 	}
-	assert.True(t, util.Contains(updateUser.Filters.AllowedIP, "192.168.1.3/32"))
-	assert.True(t, util.Contains(updateUser.Filters.DeniedIP, "10.0.0.2/32"))
-	assert.True(t, util.Contains(updateUser.Filters.DeniedLoginMethods, dataprovider.SSHLoginMethodKeyboardInteractive))
-	assert.True(t, util.Contains(updateUser.Filters.DeniedProtocols, common.ProtocolFTP))
-	assert.True(t, util.Contains(updateUser.Filters.FilePatterns[0].DeniedPatterns, "*.zip"))
+	assert.True(t, slices.Contains(updateUser.Filters.AllowedIP, "192.168.1.3/32"))
+	assert.True(t, slices.Contains(updateUser.Filters.DeniedIP, "10.0.0.2/32"))
+	assert.True(t, slices.Contains(updateUser.Filters.DeniedLoginMethods, dataprovider.SSHLoginMethodKeyboardInteractive))
+	assert.True(t, slices.Contains(updateUser.Filters.DeniedProtocols, common.ProtocolFTP))
+	assert.True(t, slices.Contains(updateUser.Filters.FilePatterns[0].DeniedPatterns, "*.zip"))
 	assert.Len(t, updateUser.Filters.BandwidthLimits, 0)
 	assert.Len(t, updateUser.Filters.TLSCerts, 1)
 	req, err = http.NewRequest(http.MethodDelete, path.Join(userPath, user.Username), nil)
@@ -26796,6 +27017,23 @@ func isDbDefenderSupported() bool {
 	default:
 		return false
 	}
+}
+
+func createTestPNG(name string, width, height int, imgColor color.Color) error {
+	upLeft := image.Point{0, 0}
+	lowRight := image.Point{width, height}
+	img := image.NewRGBA(image.Rectangle{upLeft, lowRight})
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			img.Set(x, y, imgColor)
+		}
+	}
+	f, err := os.Create(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return png.Encode(f, img)
 }
 
 func BenchmarkSecretDecryption(b *testing.B) {

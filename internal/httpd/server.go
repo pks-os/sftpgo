@@ -24,7 +24,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -172,7 +174,7 @@ func (s *httpdServer) renderClientLoginPage(w http.ResponseWriter, r *http.Reque
 		CurrentURL:     webClientLoginPath,
 		Error:          err,
 		CSRFToken:      createCSRFToken(w, r, s.csrfTokenAuth, xid.New().String(), webBaseClientPath),
-		Branding:       s.binding.Branding.WebClient,
+		Branding:       s.binding.webClientBranding(),
 		FormDisabled:   s.binding.isWebClientLoginFormDisabled(),
 		CheckRedirect:  true,
 	}
@@ -181,7 +183,7 @@ func (s *httpdServer) renderClientLoginPage(w http.ResponseWriter, r *http.Reque
 	}
 	if s.binding.showAdminLoginURL() {
 		data.AltLoginURL = webAdminLoginPath
-		data.AltLoginName = s.binding.Branding.WebAdmin.ShortName
+		data.AltLoginName = s.binding.webAdminBranding().ShortName
 	}
 	if smtp.IsEnabled() && !data.FormDisabled {
 		data.ForgotPwdURL = webClientForgotPwdPath
@@ -354,7 +356,7 @@ func (s *httpdServer) handleWebClientTwoFactorRecoveryPost(w http.ResponseWriter
 			util.NewI18nError(dataprovider.ErrInvalidCredentials, util.I18nErrorInvalidCredentials))
 		return
 	}
-	if !userMerged.Filters.TOTPConfig.Enabled || !util.Contains(userMerged.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) {
+	if !userMerged.Filters.TOTPConfig.Enabled || !slices.Contains(userMerged.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) {
 		s.renderClientTwoFactorPage(w, r, util.NewI18nError(
 			util.NewValidationError("two factory authentication is not enabled"), util.I18n2FADisabled))
 		return
@@ -422,7 +424,7 @@ func (s *httpdServer) handleWebClientTwoFactorPost(w http.ResponseWriter, r *htt
 		s.renderClientTwoFactorPage(w, r, util.NewI18nError(err, util.I18nErrorInvalidCredentials))
 		return
 	}
-	if !user.Filters.TOTPConfig.Enabled || !util.Contains(user.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) {
+	if !user.Filters.TOTPConfig.Enabled || !slices.Contains(user.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) {
 		updateLoginMetrics(&user, dataprovider.LoginMethodPassword, ipAddr, common.ErrInternalFailure)
 		s.renderClientTwoFactorPage(w, r, util.NewI18nError(common.ErrInternalFailure, util.I18n2FADisabled))
 		return
@@ -590,13 +592,13 @@ func (s *httpdServer) renderAdminLoginPage(w http.ResponseWriter, r *http.Reques
 		CurrentURL:     webAdminLoginPath,
 		Error:          err,
 		CSRFToken:      createCSRFToken(w, r, s.csrfTokenAuth, xid.New().String(), webBaseAdminPath),
-		Branding:       s.binding.Branding.WebAdmin,
+		Branding:       s.binding.webAdminBranding(),
 		FormDisabled:   s.binding.isWebAdminLoginFormDisabled(),
 		CheckRedirect:  false,
 	}
 	if s.binding.showClientLoginURL() {
 		data.AltLoginURL = webClientLoginPath
-		data.AltLoginName = s.binding.Branding.WebClient.ShortName
+		data.AltLoginName = s.binding.webClientBranding().ShortName
 	}
 	if smtp.IsEnabled() && !data.FormDisabled {
 		data.ForgotPwdURL = webAdminForgotPwdPath
@@ -742,7 +744,7 @@ func (s *httpdServer) loginUser(
 	}
 
 	audience := tokenAudienceWebClient
-	if user.Filters.TOTPConfig.Enabled && util.Contains(user.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) &&
+	if user.Filters.TOTPConfig.Enabled && slices.Contains(user.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) &&
 		user.CanManageMFA() && !isSecondFactorAuth {
 		audience = tokenAudienceWebClientPartial
 	}
@@ -862,7 +864,7 @@ func (s *httpdServer) getUserToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Filters.TOTPConfig.Enabled && util.Contains(user.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) {
+	if user.Filters.TOTPConfig.Enabled && slices.Contains(user.Filters.TOTPConfig.Protocols, common.ProtocolHTTP) {
 		passcode := r.Header.Get(otpHeaderCode)
 		if passcode == "" {
 			logger.Debug(logSender, "", "TOTP enabled for user %q and not passcode provided, authentication refused", user.Username)
@@ -1008,7 +1010,7 @@ func (s *httpdServer) checkCookieExpiration(w http.ResponseWriter, r *http.Reque
 	if time.Until(token.Expiration()) > tokenRefreshThreshold {
 		return
 	}
-	if util.Contains(token.Audience(), tokenAudienceWebClient) {
+	if slices.Contains(token.Audience(), tokenAudienceWebClient) {
 		s.refreshClientToken(w, r, &tokenClaims)
 	} else {
 		s.refreshAdminToken(w, r, &tokenClaims)
@@ -1520,6 +1522,16 @@ func (s *httpdServer) setupWebClientRoutes() {
 			r.Body = http.MaxBytesReader(w, r.Body, maxRequestSize)
 			http.Redirect(w, r, webClientLoginPath, http.StatusFound)
 		})
+		s.router.Get(path.Join(webStaticFilesPath, "branding/webclient/logo.png"),
+			func(w http.ResponseWriter, r *http.Request) {
+				r.Body = http.MaxBytesReader(w, r.Body, maxRequestSize)
+				renderPNGImage(w, r, dbBrandingConfig.getWebClientLogo())
+			})
+		s.router.Get(path.Join(webStaticFilesPath, "branding/webclient/favicon.png"),
+			func(w http.ResponseWriter, r *http.Request) {
+				r.Body = http.MaxBytesReader(w, r.Body, maxRequestSize)
+				renderPNGImage(w, r, dbBrandingConfig.getWebClientFavicon())
+			})
 		s.router.Get(webClientLoginPath, s.handleClientWebLogin)
 		if s.binding.OIDC.isEnabled() && !s.binding.isWebClientOIDCLoginDisabled() {
 			s.router.Get(webClientOIDCLoginPath, s.handleWebClientOIDCLogin)
@@ -1643,6 +1655,16 @@ func (s *httpdServer) setupWebAdminRoutes() {
 			r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodySize)
 			s.redirectToWebPath(w, r, webAdminLoginPath)
 		})
+		s.router.Get(path.Join(webStaticFilesPath, "branding/webadmin/logo.png"),
+			func(w http.ResponseWriter, r *http.Request) {
+				r.Body = http.MaxBytesReader(w, r.Body, maxRequestSize)
+				renderPNGImage(w, r, dbBrandingConfig.getWebAdminLogo())
+			})
+		s.router.Get(path.Join(webStaticFilesPath, "branding/webadmin/favicon.png"),
+			func(w http.ResponseWriter, r *http.Request) {
+				r.Body = http.MaxBytesReader(w, r.Body, maxRequestSize)
+				renderPNGImage(w, r, dbBrandingConfig.getWebAdminFavicon())
+			})
 		s.router.Get(webAdminLoginPath, s.handleWebAdminLogin)
 		if s.binding.OIDC.hasRoles() && !s.binding.isWebAdminOIDCLoginDisabled() {
 			s.router.Get(webAdminOIDCLoginPath, s.handleWebAdminOIDCLogin)
