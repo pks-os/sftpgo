@@ -800,6 +800,75 @@ func TestEventManagerErrors(t *testing.T) {
 	stopEventScheduler()
 }
 
+func TestBuiltinRules(t *testing.T) {
+	startEventScheduler()
+	rule1 := util.GenerateUniqueID()
+	loadBuiltinRulesFn = func() []dataprovider.EventRule {
+		return []dataprovider.EventRule{
+			{
+				Name:      rule1,
+				Status:    1,
+				CreatedAt: util.GetTimeAsMsSinceEpoch(time.Now()),
+				UpdatedAt: util.GetTimeAsMsSinceEpoch(time.Now()),
+				Trigger:   dataprovider.EventTriggerSchedule,
+				Conditions: dataprovider.EventConditions{
+					Schedules: []dataprovider.Schedule{
+						{
+							Hours:      "0",
+							DayOfWeek:  "*",
+							DayOfMonth: "*",
+							Month:      "*",
+						},
+					},
+				},
+				Actions: []dataprovider.EventAction{
+					{
+						BaseEventAction: dataprovider.BaseEventAction{
+							Name:    "backup",
+							Type:    dataprovider.ActionTypeBackup,
+							Options: dataprovider.BaseEventActionOptions{},
+						},
+						Order:   1,
+						Options: dataprovider.EventActionOptions{},
+					},
+				},
+			},
+		}
+	}
+
+	eventManager.loadRules()
+
+	eventManager.RLock()
+	assert.Len(t, eventManager.FsEvents, 0)
+	assert.Len(t, eventManager.ProviderEvents, 0)
+	assert.Len(t, eventManager.Schedules, 1)
+	eventManager.RUnlock()
+
+	cronJob := eventCronJob{
+		ruleName: rule1,
+	}
+	r, err := cronJob.getEventRule()
+	assert.NoError(t, err)
+	assert.Equal(t, rule1, r.Name)
+	assert.Len(t, r.Actions, 1)
+	assert.Equal(t, dataprovider.EventTriggerSchedule, r.Trigger)
+
+	eventManager.RLock()
+	eventManager.Schedules = nil
+	eventManager.RUnlock()
+
+	loadBuiltinRulesFn = nil
+
+	eventManager.loadRules()
+
+	eventManager.RLock()
+	assert.Len(t, eventManager.FsEvents, 0)
+	assert.Len(t, eventManager.ProviderEvents, 0)
+	assert.Len(t, eventManager.Schedules, 0)
+	eventManager.RUnlock()
+	stopEventScheduler()
+}
+
 func TestEventRuleActions(t *testing.T) {
 	actionName := "test rule action"
 	action := dataprovider.BaseEventAction{
@@ -1166,10 +1235,12 @@ func TestEventRuleActions(t *testing.T) {
 	action.Options = dataprovider.BaseEventActionOptions{
 		FsConfig: dataprovider.EventActionFilesystemConfig{
 			Type: dataprovider.FilesystemActionRename,
-			Renames: []dataprovider.KeyValue{
+			Renames: []dataprovider.RenameConfig{
 				{
-					Key:   "/source",
-					Value: "/target",
+					KeyValue: dataprovider.KeyValue{
+						Key:   "/source",
+						Value: "/target",
+					},
 				},
 			},
 		},
@@ -1709,10 +1780,12 @@ func TestFilesystemActionErrors(t *testing.T) {
 	assert.NoError(t, err)
 	err = dataprovider.AddUser(&user, "", "", "")
 	assert.NoError(t, err)
-	err = executeRenameFsActionForUser([]dataprovider.KeyValue{
+	err = executeRenameFsActionForUser([]dataprovider.RenameConfig{
 		{
-			Key:   "/p1",
-			Value: "/p1",
+			KeyValue: dataprovider.KeyValue{
+				Key:   "/p1",
+				Value: "/p1",
+			},
 		},
 	}, testReplacer, user)
 	if assert.Error(t, err) {
@@ -1723,10 +1796,12 @@ func TestFilesystemActionErrors(t *testing.T) {
 		Options: dataprovider.BaseEventActionOptions{
 			FsConfig: dataprovider.EventActionFilesystemConfig{
 				Type: dataprovider.FilesystemActionRename,
-				Renames: []dataprovider.KeyValue{
+				Renames: []dataprovider.RenameConfig{
 					{
-						Key:   "/p2",
-						Value: "/p2",
+						KeyValue: dataprovider.KeyValue{
+							Key:   "/p2",
+							Value: "/p2",
+						},
 					},
 				},
 			},

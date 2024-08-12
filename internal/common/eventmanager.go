@@ -70,6 +70,7 @@ var (
 	// eventManager handle the supported event rules actions
 	eventManager          eventRulesContainer
 	multipartQuoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+	loadBuiltinRulesFn    func() []dataprovider.EventRule
 )
 
 func init() {
@@ -272,10 +273,14 @@ func (r *eventRulesContainer) addUpdateRuleInternal(rule dataprovider.EventRule)
 func (r *eventRulesContainer) loadRules() {
 	eventManagerLog(logger.LevelDebug, "loading updated rules")
 	modTime := util.GetTimeAsMsSinceEpoch(time.Now())
-	rules, err := dataprovider.GetRecentlyUpdatedRules(r.getLastLoadTime())
+	lastLoadTime := r.getLastLoadTime()
+	rules, err := dataprovider.GetRecentlyUpdatedRules(lastLoadTime)
 	if err != nil {
 		eventManagerLog(logger.LevelError, "unable to load event rules: %v", err)
 		return
+	}
+	if loadBuiltinRulesFn != nil {
+		rules = append(rules, loadBuiltinRulesFn()...)
 	}
 	eventManagerLog(logger.LevelDebug, "recently updated event rules loaded: %d", len(rules))
 
@@ -1748,7 +1753,7 @@ func executeMkdirFsRuleAction(dirs []string, replacer *strings.Replacer,
 	return nil
 }
 
-func executeRenameFsActionForUser(renames []dataprovider.KeyValue, replacer *strings.Replacer,
+func executeRenameFsActionForUser(renames []dataprovider.RenameConfig, replacer *strings.Replacer,
 	user dataprovider.User,
 ) error {
 	user, err := getUserForEventAction(user)
@@ -1765,7 +1770,11 @@ func executeRenameFsActionForUser(renames []dataprovider.KeyValue, replacer *str
 	for _, item := range renames {
 		source := util.CleanPath(replaceWithReplacer(item.Key, replacer))
 		target := util.CleanPath(replaceWithReplacer(item.Value, replacer))
-		if err = conn.renameInternal(source, target, true); err != nil {
+		checks := 0
+		if item.UpdateModTime {
+			checks += vfs.CheckUpdateModTime
+		}
+		if err = conn.renameInternal(source, target, true, checks); err != nil {
 			return fmt.Errorf("unable to rename %q->%q, user %q: %w", source, target, user.Username, err)
 		}
 		eventManagerLog(logger.LevelDebug, "rename %q->%q ok, user %q", source, target, user.Username)
@@ -1827,7 +1836,7 @@ func executeExistFsActionForUser(exist []string, replacer *strings.Replacer,
 	return nil
 }
 
-func executeRenameFsRuleAction(renames []dataprovider.KeyValue, replacer *strings.Replacer,
+func executeRenameFsRuleAction(renames []dataprovider.RenameConfig, replacer *strings.Replacer,
 	conditions dataprovider.ConditionOptions, params *EventParams,
 ) error {
 	users, err := params.getUsers()
@@ -2778,9 +2787,20 @@ func (j *eventCronJob) getTask(rule *dataprovider.EventRule) (dataprovider.Task,
 	return dataprovider.Task{}, nil
 }
 
+func (j *eventCronJob) getEventRule() (dataprovider.EventRule, error) {
+	if loadBuiltinRulesFn != nil {
+		for _, rule := range loadBuiltinRulesFn() {
+			if rule.Name == j.ruleName {
+				return rule, nil
+			}
+		}
+	}
+	return dataprovider.EventRuleExists(j.ruleName)
+}
+
 func (j *eventCronJob) Run() {
 	eventManagerLog(logger.LevelDebug, "executing scheduled rule %q", j.ruleName)
-	rule, err := dataprovider.EventRuleExists(j.ruleName)
+	rule, err := j.getEventRule()
 	if err != nil {
 		eventManagerLog(logger.LevelError, "unable to load rule with name %q", j.ruleName)
 		return

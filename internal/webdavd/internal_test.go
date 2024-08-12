@@ -312,7 +312,7 @@ func (fs *MockOsFs) Remove(name string, _ bool) error {
 }
 
 // Rename renames (moves) source to target
-func (fs *MockOsFs) Rename(source, target string) (int, int64, error) {
+func (fs *MockOsFs) Rename(source, target string, _ int) (int, int64, error) {
 	err := os.Rename(source, target)
 	return -1, -1, err
 }
@@ -376,6 +376,15 @@ func TestAllowedProxyUnixDomainSocket(t *testing.T) {
 	if assert.Len(t, b.allowHeadersFrom, 1) {
 		assert.True(t, b.allowHeadersFrom[0](nil))
 	}
+}
+
+func TestProxyListenerWrapper(t *testing.T) {
+	b := Binding{
+		ProxyMode: 0,
+	}
+	require.Nil(t, b.listenerWrapper())
+	b.ProxyMode = 1
+	require.NotNil(t, b.listenerWrapper())
 }
 
 func TestRemoteAddress(t *testing.T) {
