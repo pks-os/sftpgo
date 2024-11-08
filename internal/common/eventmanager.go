@@ -58,6 +58,7 @@ const (
 	maxAttachmentsSize       = int64(10 * 1024 * 1024)
 	objDataPlaceholder       = "{{ObjectData}}"
 	objDataPlaceholderString = "{{ObjectDataString}}"
+	dateTimeMillisFormat     = "2006-01-02T15:04:05.000"
 )
 
 // Supported IDP login events
@@ -89,7 +90,7 @@ func init() {
 				ObjectType: objectType,
 				IP:         ip,
 				Role:       role,
-				Timestamp:  time.Now().UnixNano(),
+				Timestamp:  time.Now(),
 				Object:     object,
 			}
 			if u, ok := object.(*dataprovider.User); ok {
@@ -557,7 +558,7 @@ type EventParams struct {
 	IP                    string
 	Role                  string
 	Email                 string
-	Timestamp             int64
+	Timestamp             time.Time
 	UID                   string
 	IDPCustomFields       *map[string]string
 	Object                plugin.Renderer
@@ -641,7 +642,7 @@ func (p *EventParams) setBackupParams(backupPath string) {
 	p.FsPath = backupPath
 	p.ObjectName = filepath.Base(backupPath)
 	p.VirtualPath = "/" + p.ObjectName
-	p.Timestamp = time.Now().UnixNano()
+	p.Timestamp = time.Now()
 	info, err := os.Stat(backupPath)
 	if err == nil {
 		p.FileSize = info.Size()
@@ -775,11 +776,18 @@ func (*EventParams) getStringReplacement(val string, jsonEscaped bool) string {
 }
 
 func (p *EventParams) getStringReplacements(addObjectData, jsonEscaped bool) []string {
+	var dateTimeString string
+	if Config.TZ == "local" {
+		dateTimeString = p.Timestamp.Local().Format(dateTimeMillisFormat)
+	} else {
+		dateTimeString = p.Timestamp.UTC().Format(dateTimeMillisFormat)
+	}
 	replacements := []string{
 		"{{Name}}", p.getStringReplacement(p.Name, jsonEscaped),
 		"{{Event}}", p.Event,
 		"{{Status}}", fmt.Sprintf("%d", p.Status),
 		"{{VirtualPath}}", p.getStringReplacement(p.VirtualPath, jsonEscaped),
+		"{{EscapedVirtualPath}}", p.getStringReplacement(url.QueryEscape(p.VirtualPath), jsonEscaped),
 		"{{FsPath}}", p.getStringReplacement(p.FsPath, jsonEscaped),
 		"{{VirtualTargetPath}}", p.getStringReplacement(p.VirtualTargetPath, jsonEscaped),
 		"{{FsTargetPath}}", p.getStringReplacement(p.FsTargetPath, jsonEscaped),
@@ -791,7 +799,8 @@ func (p *EventParams) getStringReplacements(addObjectData, jsonEscaped bool) []s
 		"{{IP}}", p.IP,
 		"{{Role}}", p.getStringReplacement(p.Role, jsonEscaped),
 		"{{Email}}", p.getStringReplacement(p.Email, jsonEscaped),
-		"{{Timestamp}}", strconv.FormatInt(p.Timestamp, 10),
+		"{{Timestamp}}", strconv.FormatInt(p.Timestamp.UnixNano(), 10),
+		"{{DateTime}}", dateTimeString,
 		"{{StatusString}}", p.getStatusString(),
 		"{{UID}}", p.getStringReplacement(p.UID, jsonEscaped),
 		"{{Ext}}", p.getStringReplacement(p.Extension, jsonEscaped),
@@ -1475,6 +1484,9 @@ func executeHTTPRuleAction(c dataprovider.EventActionHTTPConfig, params *EventPa
 }
 
 func executeCommandRuleAction(c dataprovider.EventActionCommandConfig, params *EventParams) error {
+	if !dataprovider.IsActionCommandAllowed(c.Cmd) {
+		return fmt.Errorf("command %q is not allowed", c.Cmd)
+	}
 	addObjectData := false
 	if params.Object != nil {
 		for _, k := range c.EnvVars {
@@ -2451,7 +2463,7 @@ func executePwdExpirationCheckForUser(user *dataprovider.User, config dataprovid
 	}
 	subject := "SFTPGo password expiration notification"
 	startTime := time.Now()
-	if err := smtp.SendEmail([]string{user.Email}, nil, subject, body.String(), smtp.EmailContentTypeTextHTML); err != nil {
+	if err := smtp.SendEmail(user.GetEmailAddresses(), nil, subject, body.String(), smtp.EmailContentTypeTextHTML); err != nil {
 		eventManagerLog(logger.LevelError, "unable to notify password expiration for user %s: %v, elapsed: %s",
 			user.Username, err, time.Since(startTime))
 		return err
@@ -2545,6 +2557,9 @@ func preserveUserProfile(user, newUser *dataprovider.User) {
 		}
 		if user.Email != "" {
 			newUser.Email = user.Email
+		}
+		if len(user.Filters.AdditionalEmails) > 0 {
+			newUser.Filters.AdditionalEmails = user.Filters.AdditionalEmails
 		}
 	}
 	if newUser.CanChangeAPIKeyAuth() {

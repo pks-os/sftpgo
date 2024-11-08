@@ -26,6 +26,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -4207,6 +4208,148 @@ func TestEventRuleStatues(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEventRuleDisabledCommand(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("this test is not available on Windows")
+	}
+	smtpCfg := smtp.Config{
+		Host:          "127.0.0.1",
+		Port:          2525,
+		From:          "notification@example.com",
+		TemplatesPath: "templates",
+	}
+	err := smtpCfg.Initialize(configDir, true)
+	require.NoError(t, err)
+
+	saveObjectScriptPath := filepath.Join(os.TempDir(), "provider.sh")
+	outPath := filepath.Join(os.TempDir(), "provider_out.json")
+	err = os.WriteFile(saveObjectScriptPath, getSaveProviderObjectScriptContent(outPath, 0), 0755)
+	assert.NoError(t, err)
+
+	a1 := dataprovider.BaseEventAction{
+		Name: "a1",
+		Type: dataprovider.ActionTypeCommand,
+		Options: dataprovider.BaseEventActionOptions{
+			CmdConfig: dataprovider.EventActionCommandConfig{
+				Cmd:     saveObjectScriptPath,
+				Timeout: 10,
+				EnvVars: []dataprovider.KeyValue{
+					{
+						Key:   "SFTPGO_OBJECT_DATA",
+						Value: "{{ObjectData}}",
+					},
+				},
+			},
+		},
+	}
+	a2 := dataprovider.BaseEventAction{
+		Name: "a2",
+		Type: dataprovider.ActionTypeEmail,
+		Options: dataprovider.BaseEventActionOptions{
+			EmailConfig: dataprovider.EventActionEmailConfig{
+				Recipients: []string{"test3@example.com"},
+				Subject:    `New "{{Event}}" from "{{Name}}"`,
+				Body:       "Object name: {{ObjectName}} object type: {{ObjectType}} Data: {{ObjectData}}",
+			},
+		},
+	}
+
+	a3 := dataprovider.BaseEventAction{
+		Name: "a3",
+		Type: dataprovider.ActionTypeEmail,
+		Options: dataprovider.BaseEventActionOptions{
+			EmailConfig: dataprovider.EventActionEmailConfig{
+				Recipients: []string{"failure@example.com"},
+				Subject:    `Failed "{{Event}}" from "{{Name}}"`,
+				Body:       "Object name: {{ObjectName}} object type: {{ObjectType}}, IP: {{IP}}",
+			},
+		},
+	}
+	action1, _, err := httpdtest.AddEventAction(a1, http.StatusCreated)
+	assert.NoError(t, err)
+	action2, _, err := httpdtest.AddEventAction(a2, http.StatusCreated)
+	assert.NoError(t, err)
+	action3, _, err := httpdtest.AddEventAction(a3, http.StatusCreated)
+	assert.NoError(t, err)
+
+	r := dataprovider.EventRule{
+		Name:    "rule",
+		Status:  1,
+		Trigger: dataprovider.EventTriggerProviderEvent,
+		Conditions: dataprovider.EventConditions{
+			ProviderEvents: []string{"add"},
+			Options: dataprovider.ConditionOptions{
+				ProviderObjects: []string{"folder"},
+			},
+		},
+		Actions: []dataprovider.EventAction{
+			{
+				BaseEventAction: dataprovider.BaseEventAction{
+					Name: action1.Name,
+				},
+				Order: 1,
+				Options: dataprovider.EventActionOptions{
+					StopOnFailure: true,
+				},
+			},
+			{
+				BaseEventAction: dataprovider.BaseEventAction{
+					Name: action2.Name,
+				},
+				Order: 2,
+			},
+			{
+				BaseEventAction: dataprovider.BaseEventAction{
+					Name: action3.Name,
+				},
+				Order: 3,
+				Options: dataprovider.EventActionOptions{
+					IsFailureAction: true,
+					StopOnFailure:   true,
+				},
+			},
+		},
+	}
+	rule, _, err := httpdtest.AddEventRule(r, http.StatusCreated)
+	assert.NoError(t, err)
+	// restrit command execution
+	dataprovider.EnabledActionCommands = []string{"/bin/ls"}
+
+	lastReceivedEmail.reset()
+	// create a folder to trigger the rule
+	folder := vfs.BaseVirtualFolder{
+		Name:       "ftest failed command",
+		MappedPath: filepath.Join(os.TempDir(), "p"),
+	}
+	folder, _, err = httpdtest.AddFolder(folder, http.StatusCreated)
+	assert.NoError(t, err)
+
+	assert.NoFileExists(t, outPath)
+	assert.Eventually(t, func() bool {
+		return lastReceivedEmail.get().From != ""
+	}, 3000*time.Millisecond, 100*time.Millisecond)
+	email := lastReceivedEmail.get()
+	assert.Len(t, email.To, 1)
+	assert.True(t, slices.Contains(email.To, "failure@example.com"))
+	assert.Contains(t, email.Data, `Subject: Failed "add" from "admin"`)
+	assert.Contains(t, email.Data, fmt.Sprintf("Object name: %s object type: folder", folder.Name))
+	lastReceivedEmail.reset()
+
+	dataprovider.EnabledActionCommands = nil
+
+	_, err = httpdtest.RemoveFolder(folder, http.StatusOK)
+	assert.NoError(t, err)
+
+	_, err = httpdtest.RemoveEventRule(rule, http.StatusOK)
+	assert.NoError(t, err)
+	_, err = httpdtest.RemoveEventAction(action1, http.StatusOK)
+	assert.NoError(t, err)
+	_, err = httpdtest.RemoveEventAction(action2, http.StatusOK)
+	assert.NoError(t, err)
+	_, err = httpdtest.RemoveEventAction(action3, http.StatusOK)
+	assert.NoError(t, err)
+}
+
 func TestEventRuleProviderEvents(t *testing.T) {
 	if runtime.GOOS == osWindows {
 		t.Skip("this test is not available on Windows")
@@ -5431,7 +5574,7 @@ func TestBackupAsAttachment(t *testing.T) {
 
 	common.HandleCertificateEvent(common.EventParams{
 		Name:      "example.com",
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: time.Now(),
 		Status:    1,
 		Event:     renewalEvent,
 	})
@@ -6118,7 +6261,7 @@ func TestEventActionEmailAttachments(t *testing.T) {
 			EmailConfig: dataprovider.EventActionEmailConfig{
 				Recipients:  []string{"test@example.com"},
 				Subject:     `"{{Event}}" from "{{Name}}"`,
-				Body:        "Fs path {{FsPath}}, size: {{FileSize}}, protocol: {{Protocol}}, IP: {{IP}}",
+				Body:        "Fs path {{FsPath}}, size: {{FileSize}}, protocol: {{Protocol}}, IP: {{IP}} {{EscapedVirtualPath}}",
 				Attachments: []string{"/archive/{{VirtualPath}}.zip"},
 			},
 		},
@@ -6177,6 +6320,7 @@ func TestEventActionEmailAttachments(t *testing.T) {
 			assert.Len(t, email.To, 1)
 			assert.True(t, slices.Contains(email.To, "test@example.com"))
 			assert.Contains(t, email.Data, `Subject: "upload" from`)
+			assert.Contains(t, email.Data, url.QueryEscape("/"+testFileName))
 			assert.Contains(t, email.Data, "Content-Disposition: attachment")
 		}
 	}
@@ -7108,7 +7252,7 @@ func TestEventRuleCertificate(t *testing.T) {
 				Recipients:  []string{"test@example.com"},
 				Subject:     `"{{Event}} {{StatusString}}"`,
 				ContentType: 0,
-				Body:        "Domain: {{Name}} Timestamp: {{Timestamp}} {{ErrorString}}",
+				Body:        "Domain: {{Name}} Timestamp: {{Timestamp}} {{ErrorString}} Date time: {{DateTime}}",
 			},
 		},
 	}
@@ -7163,7 +7307,7 @@ func TestEventRuleCertificate(t *testing.T) {
 
 	common.HandleCertificateEvent(common.EventParams{
 		Name:      "example.com",
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: time.Now(),
 		Status:    1,
 		Event:     renewalEvent,
 	})
@@ -7178,9 +7322,10 @@ func TestEventRuleCertificate(t *testing.T) {
 	assert.Contains(t, email.Data, `Domain: example.com Timestamp`)
 
 	lastReceivedEmail.reset()
+	dateTime := time.Now()
 	params := common.EventParams{
 		Name:      "example.com",
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: dateTime,
 		Status:    2,
 		Event:     renewalEvent,
 	}
@@ -7195,6 +7340,7 @@ func TestEventRuleCertificate(t *testing.T) {
 	assert.True(t, slices.Contains(email.To, "test@example.com"))
 	assert.Contains(t, email.Data, fmt.Sprintf(`Subject: "%s KO"`, renewalEvent))
 	assert.Contains(t, email.Data, `Domain: example.com Timestamp`)
+	assert.Contains(t, email.Data, dateTime.UTC().Format("2006-01-02T15:04:05.000"))
 	assert.Contains(t, email.Data, errRenew.Error())
 
 	_, err = httpdtest.RemoveEventRule(rule1, http.StatusOK)
@@ -7208,7 +7354,7 @@ func TestEventRuleCertificate(t *testing.T) {
 	// ignored no more certificate rules
 	common.HandleCertificateEvent(common.EventParams{
 		Name:      "example.com",
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: time.Now(),
 		Status:    1,
 		Event:     renewalEvent,
 	})
@@ -7707,6 +7853,7 @@ func TestEventRulePasswordExpiration(t *testing.T) {
 	_, _, err = httpdtest.UpdateEventRule(rule1, http.StatusOK)
 	assert.NoError(t, err)
 	user.Email = "user@example.net"
+	user.Filters.AdditionalEmails = []string{"additional@example.net"}
 	_, _, err = httpdtest.UpdateUser(user, http.StatusOK, "")
 	assert.NoError(t, err)
 	conn, client, err = getSftpClient(user)
@@ -7722,8 +7869,9 @@ func TestEventRulePasswordExpiration(t *testing.T) {
 			return lastReceivedEmail.get().From != ""
 		}, 1500*time.Millisecond, 100*time.Millisecond)
 		email := lastReceivedEmail.get()
-		assert.Len(t, email.To, 1)
+		assert.Len(t, email.To, 2)
 		assert.Contains(t, email.To, user.Email)
+		assert.Contains(t, email.To, user.Filters.AdditionalEmails[0])
 		assert.Contains(t, email.Data, "your SFTPGo password expires in 5 days")
 		err = client.RemoveDirectory(dirName)
 		assert.NoError(t, err)
@@ -8118,6 +8266,87 @@ func TestRetentionAPI(t *testing.T) {
 		assert.NoDirExists(t, dirPath)
 	}
 
+	_, err = httpdtest.RemoveUser(user, http.StatusOK)
+	assert.NoError(t, err)
+	err = os.RemoveAll(user.GetHomeDir())
+	assert.NoError(t, err)
+}
+
+func TestPerUserTransferLimits(t *testing.T) {
+	oldMaxPerHostConns := common.Config.MaxPerHostConnections
+
+	common.Config.MaxPerHostConnections = 2
+
+	u := getTestUser()
+	u.UploadBandwidth = 32
+	user, _, err := httpdtest.AddUser(u, http.StatusCreated)
+	assert.NoError(t, err)
+	conn, client, err := getSftpClient(user)
+	if assert.NoError(t, err) {
+		defer conn.Close()
+		defer client.Close()
+
+		var wg sync.WaitGroup
+		numErrors := 0
+		for i := 0; i <= 2; i++ {
+			wg.Add(1)
+			go func(counter int) {
+				defer wg.Done()
+
+				time.Sleep(20 * time.Millisecond)
+				err := writeSFTPFile(fmt.Sprintf("%s_%d", testFileName, counter), 64*1024, client)
+				if err != nil {
+					numErrors++
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		assert.Equal(t, 1, numErrors)
+	}
+	_, err = httpdtest.RemoveUser(user, http.StatusOK)
+	assert.NoError(t, err)
+	err = os.RemoveAll(user.GetHomeDir())
+	assert.NoError(t, err)
+
+	common.Config.MaxPerHostConnections = oldMaxPerHostConns
+}
+
+func TestMaxSessionsSameConnection(t *testing.T) {
+	u := getTestUser()
+	u.UploadBandwidth = 32
+	u.MaxSessions = 2
+	user, _, err := httpdtest.AddUser(u, http.StatusCreated)
+	assert.NoError(t, err)
+	conn, client, err := getSftpClient(user)
+	if assert.NoError(t, err) {
+		defer conn.Close()
+		defer client.Close()
+
+		var wg sync.WaitGroup
+		numErrors := 0
+		for i := 0; i <= 2; i++ {
+			wg.Add(1)
+			go func(counter int) {
+				defer wg.Done()
+
+				var err error
+				if counter < 2 {
+					err = writeSFTPFile(fmt.Sprintf("%s_%d", testFileName, counter), 64*1024, client)
+				} else {
+					// wait for the transfers to start
+					time.Sleep(50 * time.Millisecond)
+					_, _, err = getSftpClient(user)
+				}
+				if err != nil {
+					numErrors++
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		assert.Equal(t, 1, numErrors)
+	}
 	_, err = httpdtest.RemoveUser(user, http.StatusOK)
 	assert.NoError(t, err)
 	err = os.RemoveAll(user.GetHomeDir())
