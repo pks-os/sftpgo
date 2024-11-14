@@ -728,7 +728,7 @@ func TestRoleRelations(t *testing.T) {
 	a.Role = role.Name
 	_, resp, err = httpdtest.AddAdmin(a, http.StatusBadRequest)
 	assert.NoError(t, err)
-	assert.Contains(t, string(resp), "a role admin cannot have the following permissions")
+	assert.Contains(t, string(resp), "a role admin cannot be a super admin")
 
 	a.Permissions = []string{dataprovider.PermAdminAddUsers, dataprovider.PermAdminChangeUsers,
 		dataprovider.PermAdminDeleteUsers, dataprovider.PermAdminViewUsers}
@@ -1840,6 +1840,10 @@ func TestBasicActionRulesHandling(t *testing.T) {
 			},
 		},
 	}
+	dataprovider.EnabledActionCommands = []string{a.Options.CmdConfig.Cmd}
+	defer func() {
+		dataprovider.EnabledActionCommands = nil
+	}()
 	_, _, err = httpdtest.UpdateEventAction(a, http.StatusOK)
 	assert.NoError(t, err)
 	// invalid type
@@ -2374,13 +2378,24 @@ func TestEventActionValidation(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, string(resp), "command is required")
 	action.Options.CmdConfig.Cmd = "relative"
+	dataprovider.EnabledActionCommands = []string{action.Options.CmdConfig.Cmd}
+	defer func() {
+		dataprovider.EnabledActionCommands = nil
+	}()
+
 	_, resp, err = httpdtest.AddEventAction(action, http.StatusBadRequest)
 	assert.NoError(t, err)
 	assert.Contains(t, string(resp), "invalid command, it must be an absolute path")
 	action.Options.CmdConfig.Cmd = filepath.Join(os.TempDir(), "cmd")
 	_, resp, err = httpdtest.AddEventAction(action, http.StatusBadRequest)
 	assert.NoError(t, err)
+	assert.Contains(t, string(resp), "is not allowed")
+
+	dataprovider.EnabledActionCommands = []string{action.Options.CmdConfig.Cmd}
+	_, resp, err = httpdtest.AddEventAction(action, http.StatusBadRequest)
+	assert.NoError(t, err)
 	assert.Contains(t, string(resp), "invalid command action timeout")
+
 	action.Options.CmdConfig.Timeout = 30
 	action.Options.CmdConfig.EnvVars = []dataprovider.KeyValue{
 		{
@@ -11801,7 +11816,7 @@ func TestUpdateAdminMock(t *testing.T) {
 	assert.Error(t, err)
 	admin := getTestAdmin()
 	admin.Username = altAdminUsername
-	admin.Permissions = []string{dataprovider.PermAdminManageAdmins}
+	admin.Permissions = []string{dataprovider.PermAdminAny}
 	asJSON, err := json.Marshal(admin)
 	assert.NoError(t, err)
 	req, _ := http.NewRequest(http.MethodPost, adminPath, bytes.NewBuffer(asJSON))
@@ -11843,7 +11858,7 @@ func TestUpdateAdminMock(t *testing.T) {
 	setBearerForReq(req, token)
 	rr = executeRequest(req)
 	checkResponseCode(t, http.StatusBadRequest, rr)
-	assert.Contains(t, rr.Body.String(), "you cannot remove these permissions to yourself")
+	assert.Contains(t, rr.Body.String(), "you cannot change your permissions")
 	admin.Permissions = []string{dataprovider.PermAdminAny}
 	admin.Role = "missing role"
 	asJSON, err = json.Marshal(admin)
@@ -11858,7 +11873,7 @@ func TestUpdateAdminMock(t *testing.T) {
 	altToken, err := getJWTAPITokenFromTestServer(altAdminUsername, defaultTokenAuthPass)
 	assert.NoError(t, err)
 	admin.Password = "" // it must remain unchanged
-	admin.Permissions = []string{dataprovider.PermAdminManageAdmins, dataprovider.PermAdminCloseConnections}
+	admin.Permissions = []string{dataprovider.PermAdminAny}
 	asJSON, err = json.Marshal(admin)
 	assert.NoError(t, err)
 	req, _ = http.NewRequest(http.MethodPut, path.Join(adminPath, altAdminUsername), bytes.NewBuffer(asJSON))
@@ -24027,6 +24042,10 @@ func TestWebEventAction(t *testing.T) {
 			},
 		},
 	}
+	dataprovider.EnabledActionCommands = []string{action.Options.CmdConfig.Cmd}
+	defer func() {
+		dataprovider.EnabledActionCommands = nil
+	}()
 	form.Set("type", fmt.Sprintf("%d", action.Type))
 	req, err = http.NewRequest(http.MethodPost, path.Join(webAdminEventActionPath, action.Name),
 		bytes.NewBuffer([]byte(form.Encode())))

@@ -3156,9 +3156,9 @@ func (s *httpdServer) handleWebUpdateAdminPost(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if username == claims.Username {
-		if claims.isCriticalPermRemoved(updatedAdmin.Permissions) {
+		if !util.SlicesEqual(admin.Permissions, updatedAdmin.Permissions) {
 			s.renderAddUpdateAdminPage(w, r, &updatedAdmin,
-				util.NewI18nError(errors.New("you cannot remove these permissions to yourself"),
+				util.NewI18nError(errors.New("you cannot change your permissions"),
 					util.I18nErrorAdminSelfPerms,
 				), false)
 			return
@@ -3381,7 +3381,7 @@ func (s *httpdServer) handleWebTemplateUserPost(w http.ResponseWriter, r *http.R
 			s.renderMessagePage(w, r, util.I18nTemplateUserTitle, http.StatusBadRequest, err, "")
 			return
 		}
-		// to create a template the "manage_system" permission is required, so role admins cannot use
+		// to create a template the "*" permission is required, so role admins cannot use
 		// this method, we don't need to force the role
 		dump.Users = append(dump.Users, u)
 		for _, folder := range u.VirtualFolders {
